@@ -44,6 +44,7 @@ examples/espressif/
 ├── setup.sh                     # Install ESP-IDF and esp-emulator
 ├── build.sh                     # Build helper script
 ├── export_smoke_model.py        # Export bundled add/multiply test data
+├── export_quantized_model.py    # Export an int8 model for the esp-nn kernels
 ├── test_emulator.py             # Check a smoke-test emulator log
 ├── executor_runner/
 │   ├── CMakeLists.txt           # Component/standalone CMake build
@@ -55,6 +56,7 @@ examples/espressif/
     ├── CMakeLists.txt           # ESP-IDF project file
     ├── sdkconfig.defaults       # Default ESP-IDF configuration
     ├── sdkconfig.defaults.esp32s3  # ESP32-S3 specific config
+    ├── sdkconfig.defaults.esp_nn_ansi  # Portable esp-nn kernels, for the emulator
     ├── partitions.csv  # Example partition table; adjust app partition size for your board and model
     └── main/
         ├── CMakeLists.txt       # Main component
@@ -314,6 +316,76 @@ This covers CPU execution and the ESP-IDF integration on S3. It does not establi
 performance or peripheral behavior on real boards, and the emulator does not
 support the original ESP32.
 
+## Quantized Models on esp-nn
+
+The [Espressif backend](../../backends/espressif/README.md) quantizes a model
+to int8 and replaces its operators with kernels from
+[esp-nn](https://github.com/espressif/esp-nn), which uses the ESP32-S3's SIMD
+instructions. Convolutions, linear layers, add, mul, pooling and softmax are
+supported; everything else stays in fp32 on the portable kernels.
+
+### 1. Export
+
+```bash
+python examples/espressif/export_quantized_model.py --model cnn \
+    --output cmake-out-esp-quant/cnn.bpte
+```
+
+`--model mlp` exports an MNIST-sized MLP instead. The `.bpte` bundles test
+inputs with the outputs expected from the esp-nn kernels. The portable
+operators the program still needs are written to `cmake-out-esp-quant/cnn.ops`.
+
+Convolutions need channels-last tensors, so the script converts the model and
+its inputs with `.to(memory_format=torch.channels_last)`; do the same for your
+own models.
+
+### 2. Build the runtime
+
+```bash
+cmake --preset esp-baremetal -G Ninja -B cmake-out-esp-quant/runtime \
+    -DCMAKE_TOOLCHAIN_FILE="$IDF_PATH/tools/cmake/toolchain-esp32s3.cmake" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DEXECUTORCH_BUILD_DEVTOOLS=ON \
+    -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
+    -DEXECUTORCH_SELECT_OPS_LIST="$(cat cmake-out-esp-quant/cnn.ops)" \
+    -DMAX_KERNEL_NUM=64
+cmake --build cmake-out-esp-quant/runtime
+cmake --install cmake-out-esp-quant/runtime
+```
+
+`MAX_KERNEL_NUM` leaves room in the operator registry for the espressif
+kernels: selective build otherwise sizes it for the selected portable kernels
+only, and registration fails at boot. If the `.ops` file is empty, pass any one
+portable operator such as `aten::add.out`.
+
+### 3. Build the firmware
+
+```bash
+idf.py -C examples/espressif/project -B "$PWD/cmake-out-esp-quant/firmware" \
+    -DIDF_TARGET=esp32s3 \
+    -DSDKCONFIG="$PWD/cmake-out-esp-quant/sdkconfig" \
+    -DET_BUILD_DIR_PATH="$PWD/cmake-out-esp-quant/runtime" \
+    -DET_PTE_FILE_PATH="$PWD/cmake-out-esp-quant/cnn.bpte" \
+    -DET_ESPRESSIF_KERNELS=ON \
+    -DET_BUNDLE_IO=ON -DET_ATOL=0.000001 -DET_RTOL=0 reconfigure
+cmake --build cmake-out-esp-quant/firmware
+```
+
+`ET_ESPRESSIF_KERNELS=ON` adds the `espressif_kernels` component; the IDF
+component manager downloads esp-nn on the first build. Flash with
+`idf.py -C examples/espressif/project -B "$PWD/cmake-out-esp-quant/firmware" -p /dev/ttyUSB0 flash monitor`.
+
+### Running on the emulator
+
+esp-emulator does not implement the ESP32-S3 SIMD instructions, and the
+optimized kernels stop with an `IllegalInstruction` panic there. For emulator
+runs, select esp-nn's portable C kernels by adding
+`-DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp_nn_ansi"` to
+the firmware configuration (with a fresh `SDKCONFIG` file), then run the
+emulator as in the [smoke test](#5-run-the-emulator). esp-nn documents both
+kernel variants as bit-exact as long as `CONFIG_NN_SKIP_NUDGE` stays disabled,
+its default.
+
 ## Memory Considerations
 
 The runner requires memory-planned tensor inputs and outputs. Export with
@@ -379,13 +451,14 @@ For larger models, load from the filesystem at runtime:
 | `FILESYSTEM_LOAD` | OFF | Load model from filesystem |
 | `ET_ESP_METHOD_ALLOCATOR_POOL_SIZE` | Auto | Method allocator size |
 | `ET_ESP_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE` | Auto | Scratch allocator size |
+| `ET_ESPRESSIF_KERNELS` | OFF | Link the esp-nn kernels of the Espressif backend |
 
 ## Differences from the Arm Example
 
 | Feature | Arm (Cortex-M) | ESP32/ESP32-S3 |
 |---------|----------------|----------------|
 | Build system | Bare-metal CMake + Arm toolchain | ESP-IDF (FreeRTOS-based) |
-| NPU | Ethos-U55/U65/U85 | None (CPU only) |
+| NPU | Ethos-U55/U65/U85 | None; int8 SIMD kernels via esp-nn |
 | Memory | ITCM/DTCM/SRAM/DDR via linker script | IRAM/DRAM/PSRAM via ESP-IDF |
 | Performance monitor | ARM PMU + Ethos-U PMU | esp_timer (64-bit wall time) |
 | Semihosting | FVP simulator filesystem access | SPIFFS/LittleFS/SD filesystem |

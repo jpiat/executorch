@@ -1,0 +1,7 @@
+# Select esp-nn's portable C kernels instead of the ESP32-S3 assembly ones.
+#
+# esp-emulator does not implement the ESP32-S3 SIMD (PIE) instructions the
+# optimized kernels use, so emulator runs layer this file over the defaults:
+#   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp_nn_ansi"
+# Do not use it on hardware: it disables the acceleration.
+CONFIG_NN_ANSI_C=y

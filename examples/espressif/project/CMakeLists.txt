@@ -23,5 +23,15 @@ set(EXECUTORCH_ROOT
 # Add the executor_runner as an extra component
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../executor_runner")
 
+# Link the esp-nn backed kernels of the Espressif backend, needed to run models
+# lowered with EspressifQuantizer/EspressifPassManager. esp-nn is fetched by the
+# IDF component manager on the first build.
+option(ET_ESPRESSIF_KERNELS "Link the espressif:: esp-nn kernels" OFF)
+if(ET_ESPRESSIF_KERNELS)
+  list(APPEND EXTRA_COMPONENT_DIRS
+       "${EXECUTORCH_ROOT}/backends/espressif/espressif_kernels"
+  )
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(executorch_esp_runner)

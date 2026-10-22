@@ -24,6 +24,11 @@ if(ESP_PLATFORM)
   # ═══════════════════════════════════════════════════════════════
   # ESP-IDF Component Build
   # ═══════════════════════════════════════════════════════════════
+  set(esp_runner_requires esp_timer esp_system spiffs)
+  if(ET_ESPRESSIF_KERNELS)
+    list(APPEND esp_runner_requires espressif_kernels)
+  endif()
+
   # Keep the PAL overrides even though the runtime supplies weak defaults.
   idf_component_register(
     SRCS
@@ -33,9 +38,7 @@ if(ESP_PLATFORM)
     INCLUDE_DIRS
     "."
     REQUIRES
-    esp_timer
-    esp_system
-    spiffs
+    ${esp_runner_requires}
     WHOLE_ARCHIVE
   )
 

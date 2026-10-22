@@ -25,6 +25,9 @@ build-direct/
 dist/
 arm-scratch/
 executorch.egg-info
+# Fetched by the ESP-IDF component manager when building the Espressif example.
+examples/espressif/project/managed_components/
+examples/espressif/project/dependencies.lock
 
 # MLX delegate code generated in-tree from backends/mlx/serialization/schema.fbs
 # by generate.py, which the MLX backend runs at build time.
